@@ -19,7 +19,7 @@ import (
 	使用该寄存器来访问函数的参数和返回值. eg: arg1+(FP)第一个参数,假设第一个参数 8 个字节, 则第二个参数为: arg2 +8(FP)
 	SP(Stack Pointer)
 	使用该寄存器来访问函数的局部变量. SP 有逻辑/物理两个寄存器.区分方法为:带 symbol 则为逻辑寄存去,否则为物理寄存器
-	物理寄存器表示的是函数栈顶,那么逻辑寄存器表示的是什么呢? 是栈底, local1-8(SP) 表示地一个局部变量
+	物理寄存器表示的是函数栈顶,那么逻辑寄存器表示的是什么呢? 是栈底, local1-8(SP) 表示第一个局部变量
 	SB(Static Base Pointer) TEXT分节的起始地址
 	PC(Program Counter) 跟物理寄存器 IP 一致
 
@@ -44,7 +44,7 @@ Stack frame layout(x86)
  +------------------+
  |     local2       |
  +------------------+
- |  args to calleeee|
+ |  args to callee  |
  +------------------+ <- real SP
 
 
