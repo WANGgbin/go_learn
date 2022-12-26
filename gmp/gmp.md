@@ -136,6 +136,7 @@ m 是 `Machine` 的简称,表达的是系统线程. 整个 go 程序基于 `OS T
     ```
 
     ```go
+    // startm() 中会调用此函数给新的线程分配 id
     func mReserveID() int64{
         id := sched.mnext
         sched.mnext++
