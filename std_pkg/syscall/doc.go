@@ -24,10 +24,4 @@ func main() {
 	syscall.Close(fd)
 }
 
-/* go 的 syscall包 本质上就是通过汇编指令SYSCALL 陷入内核. 内核系统调用之返回一个整型,
- 如果系统调用出错,则返回一个表示具体错误信息的负值. syscall 包在系统调用出错的时候,会
- 将负值包装为一个 err 并返回.
- 在 c 的标准库中,会将错误吗赋值到 errno 全局变量中. 本质上不管是 go 还是 c 调用系统
- 调用的方式都是一样的.
-关于 go 的系统调用可以参考: https://xargin.com/syscall/
-*/
+
