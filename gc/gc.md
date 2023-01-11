@@ -154,3 +154,124 @@ go runtime 中的 STW 是如何实现的呢?
 
 本质上就是设置一个特殊的变量,其他的 p 会在一些特定的节点(比如: schedule())来检查该变量的值, 如果该变量设置的话,则阻塞 p 绑定的 m. 当最后一个 p 对应的 m 阻塞后,便实现了 STW.
 在 go runtime 中,这个变量就是 `gcBlackenEnabled`, 详细内容可以函数 `gcStart` 和 `schedule`.
+
+# GC trigger
+什么时候会触发 GC 呢? 有三种方式:
+- gcTriggerTime: 定时, 有一个专门触发 GC 的协程 `forcegchelper`, 由监控线程定时唤醒. 默认是 2min
+- gcTriggerHeap: 分配内存过多
+- gcTriggerCycle: 调用 `runtime.GC()` 手动触发 GC
+
+判断某个 trigger 是否触发 GC 的核心逻辑在函数 `gcTrigger.test` 中, 源码如下:
+```go
+func (t gcTrigger) test() bool {
+	switch t.kind {
+	case gcTriggerHeap:
+		return gcController.heapLive >= gcController.trigger
+	case gcTriggerTime:
+		if gcController.gcPercent < 0 {
+			return false
+		}
+		// 在标记结束时,设置为当前时间.
+		lastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))
+		// forcegcperiod 定义为 2min
+		return lastgc != 0 && t.now-lastgc > forcegcperiod
+	case gcTriggerCycle:
+		// t.n > work.cycles, but accounting for wraparound.
+		return int32(t.n-work.cycles) > 0
+	}
+	return true
+}
+```
+我们重点关注下 gcTriggerHeap 类型. 这里涉及若干重要的变量. 
+
+`heapLive` 表示目前分配了多少内存. 实际上在整个 runtime 中,更新 heapLive 的地方很有限, 这也是出于性能的考虑. 我们看看都有哪些地方更新了 heapLive 的值.
+- `refill()`
+
+当分配对象的时候, 如果当前 p 的 mcache 对应的 mspan full 的时候, 就需要从全局 mcentral 中获取一个有空闲空间的 span, 并替换 mcache 中的 span, mcache 中原来的 span 会插入到 mcentral 当中.
+当从 mcentral 获取一个有空闲空间的 span 的时候, 便更新 heapLive:
+```go
+	// 实际上只有分配新对象的时候,才更新 heapLive += sizeof(object). 实际上, 为 p.mcache 分配个新的 span, 该 span 剩下的空间在大多数情况下,也会马上用到的,因此为了性能考虑,
+	// 我们在这里直接给 heapLive 加上当前 span 空闲的空间.
+	// 因为 heapLive 比实际对象占用的内存多一点点,因此会稍微的提前触发 GC
+	atomic.Xadd64(&gcController.heapLive, int64(s.npages*pageSize)-int64(usedBytes))
+```
+实际上, 当每一轮 GC 标记结束的时候, 会设置 heapLive = heapMarked = 存活对象大小的内存. heapLive 的起始值其实就是一轮 GC 标记结束后存活对象的大小,后续分配新的对象的时候, 同步更新, 当 heapLive 大于 trigger 的时候, 触发新一轮 GC.
+```go
+func gcMarkTermination() {
+	gcMark()
+}
+
+func gcMark() {
+	// Update the marked heap stat.
+	gcController.heapMarked = work.bytesMarked
+
+	// Update other GC heap size stats.
+	gcController.heapLive = work.bytesMarked
+}
+```
+实际上 trace 分析中, heap 表示的就是 heapLive 的大小. 所以, 在 trace web ui 中, 我们可以清晰的看到 GC 后, heap 会少很多.
+```go
+func traceHeapAlloc() {
+	traceEvent(traceEvHeapAlloc, -1, gcController.heapLive)
+}
+```
+
+`trigger` 表示当目前对象占用的内存即 heapLive >= 某个阈值 的时候, 触发 GC. 那么该值是如何计算的呢? 实际上, 当每一轮 GC 标记结束的时候,会基于当前标记的大小 `heapMarked` 和 通过 `GOGC` 设置的值计算 trigger 的大小. `heapMarked` 表示本轮 GC 标记的所有对象的大小, `GOGC` 表示当 heapLive 大于 heapMarked 特定百分比的时候, 触发 GC. 
+```go
+if c.gcPercent >= 0 {
+		goal = c.heapMarked + c.heapMarked*uint64(c.gcPercent)/100
+	}
+
+	// Set the trigger ratio, capped to reasonable bounds.
+	if c.gcPercent >= 0 {
+		// 实际上, ratio 会比 c.gcPercent/100 小一些, 这样的目的在于提前触发 GC
+		scalingFactor := float64(c.gcPercent) / 100
+		// Ensure there's always a little margin so that the
+		// mutator assist ratio isn't infinity.
+		maxTriggerRatio := 0.95 * scalingFactor
+		if triggerRatio > maxTriggerRatio {
+			triggerRatio = maxTriggerRatio
+		}
+		minTriggerRatio := 0.6 * scalingFactor
+		if triggerRatio < minTriggerRatio {
+			triggerRatio = minTriggerRatio
+		}
+	}
+
+	c.triggerRatio = triggerRatio
+
+	// Compute the absolute GC trigger from the trigger ratio.
+	//
+	// We trigger the next GC cycle when the allocated heap has
+	// grown by the trigger ratio over the marked heap size.
+	trigger := ^uint64(0)
+	if c.gcPercent >= 0 {
+		// 计算 trigger
+		trigger = uint64(float64(c.heapMarked) * (1 + triggerRatio))
+		// Don't trigger below the minimum heap size.
+		minTrigger := c.heapMinimum
+
+		// 在一些极端情况下, 比如分配了大量内存,但是存活的对象很少, 就可能导致 trigger 值很小, 如果不限制最小值, 就会导致 频繁 GC
+		// c.heapMinimum = 4M
+		// 这里我们参考下 gcControlerState 中关于 heapMininum 字段的说明,便可明白该字段的含义
+		// heapMinimum is the minimum heap size at which to trigger GC.
+		// For small heaps, this overrides the usual GOGC*live set rule.
+		//
+		// When there is a very small live set but a lot of allocation, simply
+		// collecting when the heap reaches GOGC*live results in many GC
+		// cycles and high total per-GC overhead. This minimum amortizes this
+		// per-GC overhead while keeping the heap reasonably small.
+		//
+		// During initialization this is set to 4MB*GOGC/100. In the case of
+		// GOGC==0, this will set heapMinimum to 0, resulting in constant
+		// collection even when the heap size is small, which is useful for
+		// debugging.
+		//heapMinimum uint64
+		if trigger < minTrigger {
+			trigger = minTrigger
+		}
+	}
+
+	// Commit to the trigger and goal.
+	c.trigger = trigger
+```

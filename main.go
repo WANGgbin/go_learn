@@ -1,11 +1,5 @@
 package main
 
-import (
-	"fmt"
-	"strings"
-	"unsafe"
-)
-
 func func1(i, j int64) int64 {
 	return i + j
 }
@@ -14,15 +8,33 @@ func func2(i, j, k int64) int64 {
 	return i + j + k
 }
 
-func main() {
-	var v struct{}
-	var b bool
-	fmt.Printf("%d\n", unsafe.Sizeof(v))
-	fmt.Printf("%d\n", unsafe.Sizeof(b))
+type I interface {
+	setInt(i int)
+	getInt() int
+	print() string
+}
 
-	var list1 [10]struct{}
-	var list2 [10]bool
-	fmt.Printf("%d\n", unsafe.Sizeof(list1))
-	fmt.Printf("%d\n", unsafe.Sizeof(list2))
-	strings.Builder()	
+type t struct {
+	i int
+}
+
+func (p t) setInt(i int) {
+	p.i = i
+}
+
+func (p t) getInt() int {
+	return p.i
+}
+
+func (p t) print() string {
+	return "xxx"
+}
+
+func getPrint() func(p t) string {
+	return t.print
+}
+
+func main() {
+	obj := getPrint()
+	obj(t{})
 }
