@@ -275,3 +275,242 @@ if c.gcPercent >= 0 {
 	// Commit to the trigger and goal.
 	c.trigger = trigger
 ```
+
+# sweep
+
+实际上,在 GC 初始化的时候,会拉起一个清扫协程.
+```go
+func gcenable() {
+	// bgsweep 和 bgscavenge 会往 gcenable_setup 写入数据. 使用 gcenable_setup 是为了保证对应的 bg 协程已经拉起
+	gcenable_setup = make(chan int, 2)
+	// 拉起清扫协程
+	go bgsweep()
+	go bgscavenge()
+	<-gcenable_setup
+	<-gcenable_setup
+	gcenable_setup = nilgo bgsweep()
+	memstats.enablegc = true // now that runtime is initialized, GC is okay
+}
+
+func bgsweep() {
+	sweep.g = getg()
+
+	lockInit(&sweep.lock, lockRankSweep)
+	lock(&sweep.lock)
+	// 协程睡眠, 实际上在 gcMarkTermination 中会激活此协程
+	sweep.parked = true
+	gcenable_setup <- 1
+	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+
+	for {
+		// 在 for 循环中直到清扫完所有的 span
+		for sweepone() != ^uintptr(0) {
+			sweep.nbgsweep++
+			Gosched()
+		}
+		for freeSomeWbufs(true) {
+			Gosched()
+		}
+		lock(&sweep.lock)
+		if !isSweepDone() {
+			// This can happen if a GC runs between
+			// gosweepone returning ^0 above
+			// and the lock being acquired.
+			unlock(&sweep.lock)
+			continue
+		}
+		// 清扫完毕后,再次睡眠
+		sweep.parked = true
+		goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+	}
+}
+
+// 我们重点看看 sweepone() 的实现. 在此之前我们先看看结构体的定义
+var sweep sweepdata
+
+// State of background sweep.
+type sweepdata struct {
+	lock    mutex
+	g       *g  // 清扫协程
+	parked  bool // 是否睡眠
+	started bool
+
+	nbgsweep    uint32
+	npausesweep uint32
+
+	// centralIndex is the current unswept span class.
+	// It represents an index into the mcentral span
+	// sets. Accessed and updated via its load and
+	// update methods. Not protected by a lock.
+	//
+	// Reset at mark termination.
+	// Used by mheap.nextSpanForSweep.
+	centralIndex sweepClass // 扫描到哪个 mcentral
+}
+
+// 实际上,在 gcMarkTermination 的时候,会重置 sweep.centralIndex, 并激活清扫协程
+// gcMarkTermination 内部会调用 gcSweep.
+func gcSweep(mode gcMode) {
+	// 重置 centralIndex
+	sweep.centralIndex.clear()
+
+	// 激活后台清扫协程
+	lock(&sweep.lock)
+	if sweep.parked {
+		sweep.parked = false
+		ready(sweep.g, 0, true)
+	}
+	unlock(&sweep.lock)
+}
+
+// 我们看看 nextSpanForSweep 函数的实现
+func (h *mheap) nextSpanForSweep() *mspan {
+	sg := h.sweepgen
+	for sc := sweep.centralIndex.load(); sc < numSweepClasses; sc++ {
+		// 判断是清扫 mcentral 的 full 还是 partial 成员. 实际上,就是先扫描某个 mcentral的 full成员,再扫描 partial 成员.
+		spc, full := sc.split()
+		c := &h.central[spc].mcentral
+		var s *mspan
+		if full {
+			s = c.fullUnswept(sg).pop()
+		} else {
+			s = c.partialUnswept(sg).pop()
+		}
+		if s != nil {
+			// Write down that we found something so future sweepers
+			// can start from here.
+			sweep.centralIndex.update(sc)
+			return s
+		}
+	}
+	// Write down that we found nothing.
+	sweep.centralIndex.update(sweepClassDone)
+	return nil
+}
+
+// 最后我们看看 sweepone 函数
+func sweepone() uintptr {
+	_g_ := getg()
+
+	// increment locks to ensure that the goroutine is not preempted
+	// in the middle of sweep thus leaving the span in an inconsistent state for next GC
+	_g_.m.locks++
+	if atomic.Load(&mheap_.sweepDrained) != 0 {
+		_g_.m.locks--
+		return ^uintptr(0)
+	}
+	// TODO(austin): sweepone is almost always called in a loop;
+	// lift the sweepLocker into its callers.
+	sl := newSweepLocker()
+
+	// Find a span to sweep.
+	npages := ^uintptr(0)
+	var noMoreWork bool
+	for {
+		// 获取待清扫的 span
+		s := mheap_.nextSpanForSweep()
+		if s == nil {
+			noMoreWork = atomic.Cas(&mheap_.sweepDrained, 0, 1)
+			break
+		}
+		if s, ok := sl.tryAcquire(s); ok {
+			// Sweep the span we found.
+			npages = s.npages
+			// 调用 sweep 函数清扫 span, 函数参数决定了是否归还空间到 heap, false 表示归还空间到 heap
+			// sweep 后, 如果 span allocbit 为空,则更改 arena 对应的 pageinuse 字段, 如果整个 arena 没有被使用,则可能会将内存归还给 heap
+			if s.sweep(false) {
+				// Whole span was freed. Count it toward the
+				// page reclaimer credit since these pages can
+				// now be used for span allocation.
+				atomic.Xadduintptr(&mheap_.reclaimCredit, npages)
+			} else {
+				// Span is still in-use, so this returned no
+				// pages to the heap and the span needs to
+				// move to the swept in-use list.
+				npages = 0
+			}
+			break
+		}
+	}
+
+	return npages
+}
+
+// 清扫的核心逻辑在 sweep 中.
+func (sl *sweepLocked) sweep(preserve bool) bool {
+	s := sl.mspan
+	if !preserve {
+		// We'll release ownership of this span. Nil it out to
+		// prevent the caller from accidentally using it.
+		sl.mspan = nil
+	}
+	sweepgen := mheap_.sweepgen
+
+	atomic.Xadd64(&mheap_.pagesSwept, int64(s.npages))
+
+	spc := s.spanclass
+	size := s.elemsize
+
+	// Count the number of free objects in this span.
+	nalloc := uint16(s.countAlloc())
+	nfreed := s.allocCount - nalloc
+
+	s.allocCount = nalloc
+	s.freeindex = 0 // reset allocation index to start of span.
+
+	// gcmarkBits becomes the allocBits.
+	// get a fresh cleared gcmarkBits in preparation for next GC
+	// 将 gcmarkBits 赋值给 allockBits, gcmarkBits 清零
+	s.allocBits = s.gcmarkBits
+	s.gcmarkBits = newMarkBits(s.nelems)
+
+	// Initialize alloc bits cache.
+	s.refillAllocCache(0)
+
+
+	// We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
+	// because of the potential for a concurrent free/SetFinalizer.
+	//
+	// But we need to set it before we make the span available for allocation
+	// (return it to heap or mcentral), because allocation code assumes that a
+	// span is already swept if available for allocation.
+	//
+	// Serialization point.
+	// At this point the mark bits are cleared and allocation ready
+	// to go so release the span.
+	atomic.Store(&s.sweepgen, sweepgen)
+
+	if spc.sizeclass() != 0 {
+		// Handle spans for small objects.
+		if nfreed > 0 {
+			// Only mark the span as needing zeroing if we've freed any
+			// objects, because a fresh span that had been allocated into,
+			// wasn't totally filled, but then swept, still has all of its
+			// free slots zeroed.
+			s.needzero = 1
+			stats := memstats.heapStats.acquire()
+			atomic.Xadduintptr(&stats.smallFreeCount[spc.sizeclass()], uintptr(nfreed))
+			memstats.heapStats.release()
+		}
+		if !preserve {
+			// The caller may not have removed this span from whatever
+			// unswept set its on but taken ownership of the span for
+			// sweeping by updating sweepgen. If this span still is in
+			// an unswept set, then the mcentral will pop it off the
+			// set, check its sweepgen, and ignore it.
+			// 如果没有对象, 则调用 freeSpan 将 span 归还给 heap
+			if nalloc == 0 {
+				// Free totally free span directly back to the heap.
+				mheap_.freeSpan(s)
+				return true
+			}
+			// Return span back to the right mcentral list.
+			if uintptr(nalloc) == s.nelems {
+				mheap_.central[spc].mcentral.fullSwept(sweepgen).push(s)
+			} else {
+				mheap_.central[spc].mcentral.partialSwept(sweepgen).push(s)
+			}
+		}
+	} 
+}
+```
