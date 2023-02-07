@@ -1,5 +1,7 @@
 package main
 
+import "encoding/json"
+
 func func1(i, j int64) int64 {
 	return i + j
 }
@@ -35,6 +37,4 @@ func getPrint() func(p t) string {
 }
 
 func main() {
-	obj := getPrint()
-	obj(t{})
 }
