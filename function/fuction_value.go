@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 /*
 
@@ -8,7 +11,7 @@ import "fmt"
 go 中函数被视为一种变量,可以作为函数的输入参数,也可以作为函数的返回值,同样也可以赋值给其他变量.
 当函数赋值给一个变量的时候,我们就说这个变量是个 funcval. funcval 本质上是个指向某个 struct 的指针.
 那么这个 struct 的定义是什么呢? 实际上,为了支持闭包, 该 struct 由 "函数指针 + 捕获列表" 组成.
-该 struct 我们称之为 "闭包对象". 闭包对象中的函数指针, 我们称之为 "闭包函数".
+该 struct 我们称之为 "闭包对象". 闭包对象中的函数指针指向的函数, 我们称之为 "闭包函数".
 struct {
 	F uintpr
 	var1 type
@@ -43,8 +46,43 @@ func outter(n int) func() {
 	}
 }
 
+//func main() {
+//	n := 1
+//	outter(n)()
+//	fmt.Printf("%d\n", n)
+//}
+
+/*
+
+注意在闭包函数内部定义与捕获列表中同名的变量引起的覆盖问题。
+*/
+
+func toUpper(s string) (int, string) {
+	upper := strings.ToUpper(s)
+	return len(s), upper
+}
+
 func main() {
-	n := 1
-	outter(n)()
-	fmt.Printf("%d\n", n)
+	i := "main"
+	f := func() int {
+		var length int
+		length, i = toUpper(i) // 左侧的 i 仍然是捕获列表中的 i
+		fmt.Printf("%s\n", i)
+		return length
+	}
+
+	fmt.Printf("before: %s\n", i)
+	f()
+	fmt.Printf("after: %s\n", i) // 输出：MAIN
+
+	i = "main"
+	f = func() int {
+		length, i := toUpper(i) // 左侧的 i 是闭包函数内部的变量，并不是捕获列表中的 i，所以这里对 i 的修改并不会影响外部的 i
+		fmt.Printf("%s\n", i)
+		return length
+	}
+
+	fmt.Printf("before: %s\n", i)
+	f()
+	fmt.Printf("after: %s\n", i) // 输出：main
 }
