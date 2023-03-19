@@ -179,9 +179,21 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool, regs 
 从源码中可以看到，函数是 makeFuncStub 本质上就是根据函数的 ABI 将入参从栈帧或者寄存器上转化为 []Values， 然后调用 MakeFunc()
 第二个参数指定的函数， 最后再次根据 ABI 信息， 将返回的 []Values 拷贝到函数的寄存器或者栈帧上，完成函数的调用。
 
+所以，MakeFunc 到底干了什么呢？ 实际上并没有生成新的函数，函数本来就只在编译期生成。MakeFunc 返回的函数对象对应的函数是 makeFuncStub.
+makeFuncStub 怎么可以适用于任何函数呢？
+首先，通过 ABI 来获取目标函数类型入参和返回值的栈帧及寄存器布局， 从而可以获取任意函数类型的入参。
+其次，就是 MakeFunc() 的第二个参数。 我们可以看到它的原型为 func(args []Values) []Values. 正是入参和返回值的列表化处理，使得只需要定义
+一个 func(args []Values) []Values 便可通过 MakeFunc() 生成多种类型的函数对象(前提是这些函数对象的逻辑可以统一起来)。
+
 2. reflect.MakeFunc 的使用场景
-那么 MakeFunc 有什么用呢？一个典型的场景是可以实现动态函数。
-TODO(wangguobin) 补充其他使用场景
+那么 MakeFunc 有什么用呢?
+
+2.1 Mock 函数的时候，我们根据函数的类型以及函数 Mock 的返回值，来生成一个函数。然后通过将待 Mock 的目标函数的头部指令转化为
+"mov $to, %rdx(设置闭包对象地址到 rdx 中);
+jmp *%rds (跳转到 MakeFunc 生成的函数)"，
+即可实现函数的 Mock
+
+TODO(wangguobin): 补充其他使用场景
 
 3. value.Call()
 value.Call() 函数实现为：
@@ -235,12 +247,6 @@ func (v Value) call(op string, in []Value) []Value {
 
 	// 根据 ABI 将 []Value 拷贝到中间栈帧，具体逻辑同 MakeFunc。
 	for i, v := range in {
-		v.mustBeExported()
-		targ := t.In(i).(*rtype)
-		// TODO(mknyszek): Figure out if it's possible to get some
-		// scratch space for this assignment check. Previously, it
-		// was possible to use space in the argument frame.
-		v = v.assignTo("reflect.Value.Call", targ, nil)
 	stepsLoop:
 		for _, st := range abi.call.stepsForValue(i + inStart) {
 			switch st.kind {
@@ -284,10 +290,6 @@ func (v Value) call(op string, in []Value) []Value {
 			}
 		}
 	}
-	// TODO(mknyszek): Remove this when we no longer have
-	// caller reserved spill space.
-	frameSize = align(frameSize, goarch.PtrSize)
-	frameSize += abi.spill
 
 	// 调用 call 完成函数调用，该函数 link 到 runtime.reflectcall， 后面分析 runtime.reflectcall 的实现。
 	call(frametype, fn, stackArgs, uint32(frametype.size), uint32(abi.retOffset), uint32(frameSize), &regArgs)
@@ -363,7 +365,7 @@ func (v Value) call(op string, in []Value) []Value {
 
 // 该函数完成 fn 的调用
 // 在调用 fn 前，首先通过中间栈帧和寄存器来初始化 fn 的调用环境，然后调用 fn， 最后将 fn 的返回值拷贝到中间栈帧(stackArgs)和寄存器(regArgs)中。
-// TODO(wangguobin) 可以通过 objdump 来查看此函数的实现。
+// TODO(wangguobin): 可以通过 objdump 来查看此函数的实现。
 func reflectcall(stackArgsType *_type, fn, stackArgs unsafe.Pointer, stackArgsSize, stackRetOffset, frameSize uint32, regArgs *abi.RegArgs)
 
 */
