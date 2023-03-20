@@ -28,6 +28,7 @@ import (
 
 /*
 reflect.DeepEqual 的实现
+本质上, 所有的复合类型的比较最后都转化为基本类型的比较.
 */
 
 func myDeepEqual(dst, src any) bool {
@@ -208,6 +209,9 @@ func MakeSlice(typ Type, len, cap int) Value
 /*
 
 有了前面的基础知识，我们基于 reflect 实现一个 deepCopy.
+核心思路: 先分配内存再进行赋值操作. 分配内存本质上调用的是 runtime 中的分配函数, 赋值操作跟具体的
+类型有关.如果是基本类型,则直接拷贝即可.但对于引用类型(ptr, map, slice 等),则需要再分配内存并赋值.
+整个过程有点类似 c++ 中的拷贝构造函数(根据一个已有的对象构造一个新的对象).
 
 */
 
