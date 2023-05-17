@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"reflect"
 )
 
@@ -28,97 +27,98 @@ import (
 
 /*
 reflect.DeepEqual 的实现
+本质上, 所有的复合类型的比较最后都转化为基本类型的比较.
 */
 
-func myDeepEqual(dst, src any) bool {
-	dVal := reflect.ValueOf(dst)
-	sVal := reflect.ValueOf(src)
+//  func myDeepEqual(dst, src any) bool {
+// 	dVal := reflect.ValueOf(dst)
+// 	sVal := reflect.ValueOf(src)
 
-	if dVal.Type() != sVal.Type() {
-		return false
-	}
+// 	if dVal.Type() != sVal.Type() {
+// 		return false
+// 	}
 
-	return myDoDeepEqual(dVal, sVal)
-}
+// 	return myDoDeepEqual(dVal, sVal)
+// }
 
-func myDoDeepEqual(dst, src reflect.Value) bool {
-	switch dst.Kind() {
-	case reflect.Bool:
-		return dst.Bool() == src.Bool()
-	case reflect.Int8, reflect.Int16, reflect.Int, reflect.Int32, reflect.Int64:
-		return dst.Int() == src.Int()
-	case reflect.Uint8, reflect.Uint16, reflect.Uint, reflect.Uint32, reflect.Uint64:
-		return dst.Uint() == src.Uint()
-	case reflect.Float32, reflect.Float64:
-		return dst.Float() == src.Float()
-	case reflect.String:
-		return dst.String() == src.String()
-	case reflect.Slice:
-		if dst.Len() != src.Len() {
-			return false
-		}
-		// 对于 Slice, UnsafePointer() 返回第一个元素的地址。
-		if dst.UnsafePointer() == src.UnsafePointer() {
-			return true
-		}
-		for index := 0; index < dst.Len(); index++ {
-			if !myDoDeepEqual(dst.Index(index), src.Index(index)) {
-				return false
-			}
-		}
-		return true
-	case reflect.Array:
-		for index := 0; index < dst.Len(); index++ {
-			if !myDoDeepEqual(dst.Index(index), src.Index(index)) {
-				return false
-			}
-		}
-		return true
-	case reflect.Struct:
-		for index := 0; index < dst.NumField(); index++ {
-			if !myDoDeepEqual(dst.Field(index), src.Field(index)) {
-				return false
-			}
-		}
-		return true
-	case reflect.Map:
-		if dst.Len() != src.Len() {
-			return false
-		}
-		for _, key := range dst.MapKeys() {
-			dstVal := dst.MapIndex(key)
-			// MapIndex key 不存在的时候，返回 zero Value
-			srcVal := dst.MapIndex(key)
-			// IsValid() 用来判断一个 Value 是否是一个zero Value
-			if !srcVal.IsValid() || !myDoDeepEqual(dstVal, srcVal) {
-				return false
-			}
-		}
-		return true
-	case reflect.Interface:
-		// Interface 的 IsNil() 判断 interface 是不是个 nil 值，即第一个 word 为 nil
-		// 注意这种手法。
-		if dst.IsNil() || src.IsNil() {
-			return dst.IsNil() == src.IsNil()
-		}
-		return myDoDeepEqual(dst.Elem(), src.Elem())
-	case reflect.Pointer:
-		// 对于 Pointer, UnsafePointer() 返回 v.ptr
-		if dst.UnsafePointer() == src.UnsafePointer() {
-			return true
-		}
-		return myDoDeepEqual(dst.Elem(), src.Elem())
+// func myDoDeepEqual(dst, src reflect.Value) bool {
+// 	switch dst.Kind() {
+// 	case reflect.Bool:
+// 		return dst.Bool() == src.Bool()
+// 	case reflect.Int8, reflect.Int16, reflect.Int, reflect.Int32, reflect.Int64:
+// 		return dst.Int() == src.Int()
+// 	case reflect.Uint8, reflect.Uint16, reflect.Uint, reflect.Uint32, reflect.Uint64:
+// 		return dst.Uint() == src.Uint()
+// 	case reflect.Float32, reflect.Float64:
+// 		return dst.Float() == src.Float()
+// 	case reflect.String:
+// 		return dst.String() == src.String()
+// 	case reflect.Slice:
+// 		if dst.Len() != src.Len() {
+// 			return false
+// 		}
+// 		// 对于 Slice, UnsafePointer() 返回第一个元素的地址。
+// 		if dst.UnsafePointer() == src.UnsafePointer() {
+// 			return true
+// 		}
+// 		for index := 0; index < dst.Len(); index++ {
+// 			if !myDoDeepEqual(dst.Index(index), src.Index(index)) {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	case reflect.Array:
+// 		for index := 0; index < dst.Len(); index++ {
+// 			if !myDoDeepEqual(dst.Index(index), src.Index(index)) {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	case reflect.Struct:
+// 		for index := 0; index < dst.NumField(); index++ {
+// 			if !myDoDeepEqual(dst.Field(index), src.Field(index)) {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	case reflect.Map:
+// 		if dst.Len() != src.Len() {
+// 			return false
+// 		}
+// 		for _, key := range dst.MapKeys() {
+// 			dstVal := dst.MapIndex(key)
+// 			// MapIndex key 不存在的时候，返回 zero Value
+// 			srcVal := dst.MapIndex(key)
+// 			// IsValid() 用来判断一个 Value 是否是一个zero Value
+// 			if !srcVal.IsValid() || !myDoDeepEqual(dstVal, srcVal) {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	case reflect.Interface:
+// 		// Interface 的 IsNil() 判断 interface 是不是个 nil 值，即第一个 word 为 nil
+// 		// 注意这种手法。
+// 		if dst.IsNil() || src.IsNil() {
+// 			return dst.IsNil() == src.IsNil()
+// 		}
+// 		return myDoDeepEqual(dst.Elem(), src.Elem())
+// 	case reflect.Pointer:
+// 		// 对于 Pointer, UnsafePointer() 返回 v.ptr
+// 		if dst.UnsafePointer() == src.UnsafePointer() {
+// 			return true
+// 		}
+// 		return myDoDeepEqual(dst.Elem(), src.Elem())
 
-	case reflect.Func:
-		// 注意函数的比较， 非空情况下，都是 false
-		if dst.IsNil() && src.IsNil() {
-			return true
-		}
-		return false
-	}
+// 	case reflect.Func:
+// 		// 注意函数的比较， 非空情况下，都是 false
+// 		if dst.IsNil() && src.IsNil() {
+// 			return true
+// 		}
+// 		return false
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
 //func main() {
 //	type info struct {
@@ -208,80 +208,120 @@ func MakeSlice(typ Type, len, cap int) Value
 /*
 
 有了前面的基础知识，我们基于 reflect 实现一个 deepCopy.
+核心思路: 先分配内存再进行赋值操作. 分配内存本质上调用的是 runtime 中的分配函数, 赋值操作跟具体的
+类型有关.如果是基本类型,则直接拷贝即可.但对于引用类型(ptr, map, slice 等),则需要再分配内存并赋值.
+整个过程有点类似 c++ 中的拷贝构造函数(根据一个已有的对象构造一个新的对象).
 
 */
 
 // 注意！！！
 // 目前，无法对结构体的未导出变量进行设置。
 // 思路：New() 方法分配对象， Set() 方法进行拷贝
-func myDeepCopy(src any) any {
-	srcVal := reflect.ValueOf(src)
-	return myDoDeepCopy(srcVal).Interface()
-}
+// func myDeepCopy(src any) any {
+// 	srcVal := reflect.ValueOf(src)
+// 	return myDoDeepCopy(srcVal).Interface()
+// }
 
 // 在我们的实现中，总是将 deepCopy 生成的 Value 复制给目标 Value, 这是因为 Set() 的本质
 // 就是内存拷贝，如果不 deepCopy 直接使用 Set() 函数，是错误的！！！
-func myDoDeepCopy(src reflect.Value) reflect.Value {
-	var dst reflect.Value
-	switch src.Kind() {
-	case reflect.Pointer:
-		elem := reflect.New(src.Type().Elem()).Elem()
-		elem.Set(myDoDeepCopy(src.Elem()))
-		return elem.Addr()
-	case reflect.Struct:
-		dst = reflect.New(src.Type()).Elem()
-		for i := 0; i < src.NumField(); i++ {
-			if !dst.Field(i).CanSet() {
-				// 结构体的未导出字段不能更改
-				panic(fmt.Sprintf("can't set field: %s", dst.Type().Field(i).Name))
-			}
-			dst.Field(i).Set(myDoDeepCopy(src.Field(i)))
-		}
-	case reflect.Slice:
-		dst = reflect.MakeSlice(src.Type(), src.Len(), src.Cap())
-		for i := 0; i < src.Len(); i++ {
-			dst.Index(i).Set(myDoDeepCopy(src.Index(i)))
-		}
-	case reflect.Array:
-		dst = reflect.New(src.Type()).Elem()
-		for i := 0; i < src.Len(); i++ {
-			dst.Index(i).Set(myDoDeepCopy(src.Index(i)))
-		}
-	case reflect.Map:
-		dst = reflect.MakeMap(src.Type())
-		// MapKeys() 返回的 []Value 是 src key 的副本 !!!
-		for _, key := range src.MapKeys() {
-			dst.SetMapIndex(key, myDoDeepCopy(src.MapIndex(key)))
-		}
-	default:
-		// 对于基础类型，无须额外分配空间，直接返回 src
-		return src
-	}
-	return dst
+// func myDoDeepCopy(src reflect.Value) reflect.Value {
+// 	var dst reflect.Value
+// 	switch src.Kind() {
+// 	case reflect.Pointer:
+// 		elem := reflect.New(src.Type().Elem()).Elem()
+// 		elem.Set(myDoDeepCopy(src.Elem()))
+// 		return elem.Addr()
+// 	case reflect.Struct:
+// 		dst = reflect.New(src.Type()).Elem()
+// 		for i := 0; i < src.NumField(); i++ {
+// 			if !dst.Field(i).CanSet() {
+// 				// 结构体的未导出字段不能更改
+// 				panic(fmt.Sprintf("can't set field: %s", dst.Type().Field(i).Name))
+// 			}
+// 			dst.Field(i).Set(myDoDeepCopy(src.Field(i)))
+// 		}
+// 	case reflect.Slice:
+// 		dst = reflect.MakeSlice(src.Type(), src.Len(), src.Cap())
+// 		for i := 0; i < src.Len(); i++ {
+// 			dst.Index(i).Set(myDoDeepCopy(src.Index(i)))
+// 		}
+// 	case reflect.Array:
+// 		dst = reflect.New(src.Type()).Elem()
+// 		for i := 0; i < src.Len(); i++ {
+// 			dst.Index(i).Set(myDoDeepCopy(src.Index(i)))
+// 		}
+// 	case reflect.Map:
+// 		dst = reflect.MakeMap(src.Type())
+// 		// MapKeys() 返回的 []Value 是 src key 的副本 !!!
+// 		for _, key := range src.MapKeys() {
+// 			dst.SetMapIndex(key, myDoDeepCopy(src.MapIndex(key)))
+// 		}
+// 	default:
+// 		// 对于基础类型，无须额外分配空间，直接返回 src
+// 		return src
+// 	}
+// 	return dst
+// }
+
+// func main() {
+// 	type sub struct {
+// 		I int
+// 	}
+// 	type Info struct {
+// 		S []int
+// 		M map[int]int
+// 		P *sub
+// 	}
+
+// 	info1 := &Info{
+// 		S: []int{1, 2},
+// 		M: map[int]int{1: 2, 2: 3},
+// 		P: &sub{I: 1},
+// 	}
+
+// 	infoDeep := myDeepCopy(info1).(*Info)
+// 	infoCopy := info1
+// 	info1.S = append(info1.S, 3)
+// 	info1.M[1] = 0
+// 	info1.P.I = 0
+
+// 	fmt.Printf("deep copy: s: %v, m: %v, p: %v\n", infoDeep.S, infoDeep.M, *infoDeep.P)
+// 	fmt.Printf("copy: s: %v, m: %v, p: %v\n", infoCopy.S, infoCopy.M, *infoCopy.P)
+// }
+
+type person struct {
+	name string
+	age  int
+}
+
+func (p *person) GetName() string {
+	return p.name
+}
+
+func (p *person) GetAge() int {
+	return p.age
 }
 
 func main() {
-	type sub struct {
-		I int
-	}
-	type Info struct {
-		S []int
-		M map[int]int
-		P *sub
-	}
+	p := &person{name: "wgb", age: 12}
+	v := reflect.ValueOf(p)
 
-	info1 := &Info{
-		S: []int{1, 2},
-		M: map[int]int{1: 2, 2: 3},
-		P: &sub{I: 1},
-	}
+	/*
+		Method():
+		1. 只有导出方法才可以访问
+		2. 方法序号不是跟申明顺序保持一致的, 而是根据方法名排序的. 目的是为了方便接口的断定
+		3. Call 内部将 rcvr 当作一个普通的入参处理.
+	*/
+	age := v.Method(0).Call([]reflect.Value{})[0].Interface().(int)
+	print(age)
 
-	infoDeep := myDeepCopy(info1).(*Info)
-	infoCopy := info1
-	info1.S = append(info1.S, 3)
-	info1.M[1] = 0
-	info1.P.I = 0
+	f := func() {}
+	print(reflect.TypeOf(f).Name())
 
-	fmt.Printf("deep copy: s: %v, m: %v, p: %v\n", infoDeep.S, infoDeep.M, *infoDeep.P)
-	fmt.Printf("copy: s: %v, m: %v, p: %v\n", infoCopy.S, infoCopy.M, *infoCopy.P)
+	/*
+		Method() 的类型元信息与对应的函数元信息是一致的.
+	*/
+
+	f1 := func() int { return 0 }
+	print(reflect.TypeOf(f1) == reflect.TypeOf(p.GetAge)) // output: true
 }
