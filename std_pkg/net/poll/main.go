@@ -69,7 +69,7 @@ go 的网络模型位于内核和应用层之间,既要保证应用层的易用,
  4. 协程读写数据底层实现流程
 	net.conn.Read()
 		-> net.netFD.Read()
-			-> internall/poll.FD.Read()
+			-> internal/poll.FD.Read()
 				-> 直接调用系统调用尝试读一次: n, err := ignoringEINTRIO(syscall.Read, fd.Sysfd, p)
 					-> 读到数据,直接返回
 					-> 否则,调用 internal/poll.pollDesc.waitRead()
