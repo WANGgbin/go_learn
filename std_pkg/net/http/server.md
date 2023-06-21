@@ -33,6 +33,9 @@
     - 通过 bufio 实现提高 io 性能, **注意 bufio 这种装饰器模式的应用，在 src 之上增加功能的时候，就应该考虑装饰器模式**
 
 - 如果请求的长度 > Content-Length 指定的长度，怎么处理
+  
+    返回 400 错误，并关闭链接。
+  
 - 优雅关闭？
     
     - 首先关闭监听套接字
@@ -40,13 +43,29 @@
   
 - 怎么判断一条链接是否空闲
   
-  为每一条链接维护了状态，当在一条链接上已经处理完一个 request 并等待处理下一个请求时，此时链接
-  的状态就是空闲的。参考：D:/install/go/src/net/http/server.go:2801
+  为每一条链接维护了状态，当在一条链接上已经处理完一个 request 并等待处理下一个请求时，此时链接 的状态就是空闲的。参考：D:/install/go/src/net/http/server.go:2801
 
-- server 端什么时候需要 reuse 一条链接
-
-    - http/1.0 Connection: Keep-Live
-    - http/1.1 默认重用链接，如果指定 Connection: close 则关闭链接
+- server 端什么时候需要 关闭 一条链接
+    
+    - response.closeAfterReplay == true
+      
+        - 对于 http/1.0，如果 req 没有设置 Connection: keep-live。
+        
+        - req 设置 Connection: close.
+        
+        - server 层设置 keepAlivesEnabled == false
+        
+        - handler 注入 Connection: close
+        
+        - http1.0，如果无法确定 Content-Length，则通过 close connection 通知客户端 body 的结束。 http1.0 不支持 chunk 特性。
+        
+    - response.conn.werr != nil
+      
+        response 写的时候链接发生错误
+      
+    - response.contentLength != w.written
+    
+        response 写入的数据跟 contentLength 不相等时，关闭链接
   
 - server 扩展点
 
@@ -60,11 +79,10 @@
     ```
     
     默认的 handler 是 ServeMux 类型变量：DefaultServerMux，其内部定义了默认的路由规则。因此，
-如果我们要自定义路由规则，只需要实现 Handler 接口即可。实际上，go 世界很流行的 web 框架 Gin
-就是通过这种方式来实现自定义的路由规则的。
 
-    这一点给我们的启发是，在开发的时候，要留好扩展点，要遵循 DIP(Dependency Inverse Principle) 原则，上层依赖接口而不是具体实现，
-这样可以尽量的降低彼此之间的耦合，方便维护和扩展。
+    如果我们要自定义路由规则，只需要实现 Handler 接口即可。实际上，go 世界很流行的 web 框架 Gin 就是通过这种方式来实现自定义的路由规则的。
+
+    这一点给我们的启发是，在开发的时候，要留好扩展点，要遵循 DIP(Dependency Inverse Principle) 原则，上层依赖接口而不是具体实现， 这样可以尽量的降低彼此之间的耦合，方便维护和扩展。
     
 - server 侧的 header 是如何注入的？
 
@@ -90,8 +108,8 @@
         - Transfer-Encoding：http1.1 及以上，如果没设置 Content-Length，则设置为 Chunk，开启 Chunk 模式
         - Connection：关闭链接还是打开链接
     - Write
-      ```go
-    func (cw *chunkWriter) Write(p []byte) (n int, err error) {
+```go
+func (cw *chunkWriter) Write(p []byte) (n int, err error) {
 	if !cw.wroteHeader {
 		cw.writeHeader(p)
 	}
@@ -118,8 +136,71 @@
 	}
 	return
 }
-      ```
+```
 
 - server 发生错误的时候如何响应？业务层错误？框架层错误？
+  
+    - 客户端错误
+      返回 400
+    - 业务错误
+      通过 ResponseWriter.WriteHeader(statusCode) 指定业务指定错误码
+    - 框架层错误
+      关闭链接
 
+- 在 httpHandler(w http.ResponseWriter, r *http.Request) 应该做什么
+
+    - 注入必要的 Header
+    - 指定状态码
+    - 是否关闭 tcp 链接
+    - 写入 body
+    
+- server 端写入流程
+
+    - 包括 4 个 writer：
+      
+        response.w bufio.Writer ->
+            response.cw chunkWriter ->
+                response.conn.bufw bufio.Writer ->
+                    checkConnErrorWriter ->
+                        conn.rwc(底层的链接)
+        
+        可以看到上述流程封装了很多的 writer 为什么？
+        - response.w -> response.cw 
+          
+            为了实现 http 的 chunk 特性，某些场景下，事先无法确定 body 的长度，此时就可以使用 chunk 特性。而这一层封装通过 bufsize 确定了 chunk 的大小，当缓冲区满的时候(除了最后一次 Flush)，便发送一次 chunk。
+        
+        - response.cw -> response.conn.bufw
+          
+            chunkWriter 除了实现 chunk 特性外，还有一个很重要的作用就是确定最终的 Header，比如：Content-Type、Content-Length、Connection、Transfer-Encoding 等。
+        
+        - conn.bufw -> checkConnErrorWriter
+          
+            有了缓冲区之后，只在必要的时候(缓冲区满、Flush)才会调用底层的 I/O，提高效率。
+        
+        - checkConnErrorWriter -> conn.rwc
+        
+            写错误的记录：response.werr，从而据此关闭底层链接
+        
+    - 另外一个特别需要学习的地方是，这一套写入流程应用了一种经典的设计模式：装饰器模式。
+    
+        都是 writer，通过装饰器模式，叠加一层层的功能，层层之间通过接口隔离实现。
+    
+- 几个重要的 Header
+    看看几个重要的 Header 是如何确定的。
+  
+    - Content-Type
+    
+        如果在 handler 中没有指定的话， chunkWriter 会采用嗅探协议来确定 Content-Type.
+      
+    - Content-Length
+        
+        - handler 指定 Transfer-Encoding 头部，则不能指定 Content-Length 头部
+        - handler 指定 Content-Length，正确性由 handler 保证。
+        - handler 未指定 Content-Length 和 Transfer-Encoding
+          
+            - 如果 body 长度 > 2048，则采用 chunk 特性，指定 Transfer-Encoding: chunked， 不指定 Content-Length.
+            - 否则，Content-Length = len(p)
+    
+    - Connection
+    
 
