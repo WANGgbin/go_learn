@@ -59,6 +59,10 @@
         
         - http1.0，如果无法确定 Content-Length，则通过 close connection 通知客户端 body 的结束。 http1.0 不支持 chunk 特性。
         
+        - 在 chunkWriter.Write 的时候，在返回响应前，还会检测是否读取完 req.body，如果没有则尝试 consume req.body
+        剩下的内容，如果遇到认为非 io.EOF 的错误，则设置 closeAfterReplay == true。因为，req 中剩余的内容不能作为写一个
+        req 的一部分。
+  
     - response.conn.werr != nil
       
         response 写的时候链接发生错误
@@ -153,6 +157,18 @@ func (cw *chunkWriter) Write(p []byte) (n int, err error) {
     - 指定状态码
     - 是否关闭 tcp 链接
     - 写入 body
+    - 读取 request.body
+    
+        - 如果 body 长度 < request.Content-Length 会发生什么
+          
+            在调用 body.Read() 的时候，会返回 io.ErrUnexpectedEOF 错误。
+          
+        - 如果 handler 没有读取完毕 body 会发生什么
+          
+            实际上在发送响应前，会尝试读取完 body。或者 handler 可以通过 body.Close() 丢弃剩余的内容。
+        - request.body.Close() 发生了什么
+            
+            丢弃 request body 剩余的内容。
     
 - server 端写入流程
 
