@@ -1,7 +1,7 @@
 学习如何跟数据库进行交互。
 
 # 几个问题
-- ping() 如何实现的？
+
 - mysql 协议？
 
 mysql 协议格式还是比较简单的，如下所示：
@@ -9,6 +9,18 @@ mysql 协议格式还是比较简单的，如下所示：
 | 3 Byte Length | 1 Byte Sequence |<br>
 |           Payload               |
 
+
+- ping() 如何实现的？
+
+  发送特定类型的数据包。
+  
+  Packet Length: 1
+  Packet Number: 0
+  Request Command Ping
+    Command: Ping(14)
+
+  对应字节序列为：01 00 00 00 0e
+  
 - mysql 跟 golang 数据类型对比
 
 - database/sql 使用
@@ -52,8 +64,87 @@ mysql 协议格式还是比较简单的，如下所示：
   
   - 分层模型
   
+    整个设计类似模板模式。database/sql 中的操作是固定的模板，首先从连接池中获取空闲的连接，然后调用 driver 的具体
+    实现来完成相关的操作，完成之后，释放连接到连接池中。
+    
   - 哪些接口
   
+    - driver.Conn
+      
+      底层到数据库连接的抽象，主要包括两个方法：
+      
+      - Prepare(query string) (Stmt, error)
+        
+        自定义预处理语句，预处理语句是 session 维度的，即跟当前连接是绑定的。
+        
+      - Close() error
+      
+        关闭连接相关的预处理语句，事务等，标记该连接不再使用。
+  
+      - Begin() (Tx, error)
+  
+        开启一个事务。
+      
+    - driver.Stmt
+      
+      是对预处理语句的抽象。包括以下几个方法：
+  
+      - Exec(args []Value) (Result, error)
+      
+        不返回值的操作，包括：Insert、Update、Delete。
+        
+      - Query(args []Value) (Rows, error)
+        
+        返回值的操作，主要是查询操作。
+    
+      - NumInput() int
+    
+        获取预处理语句占位符的个数。
+    
+      - Close() error
+    
+        关闭/丢弃 预处理语句。
+    
+    - driver.Tx
+    
+      底层事务的抽象，不同数据库事务实现不尽相同。
+    
+      - Commit() error
+        
+        事务提交
+    
+      - Rollback() error
+    
+        事务回滚
+    
+    - driver.Result
+    
+      Stmt.Exec 的执行结果。包括两个方法。
+    
+      - LastInsertId() (int64, error)
+        
+        返回数据库的自增主键 ID
+        
+      - RowsAffected() (int64, error)
+    
+        操作更改的数据行数。
+    
+    - driver.Rows
+    
+      Stmt.Query 查询结果抽象。
+    
+      - Columns() []string 
+        
+        查询涉及所有的列名
+    
+      - Close() error
+        
+        关闭迭代器
+    
+      - Next(dest []Value) error
+    
+        获取下一行记录到 dest，如果没有下一行记录，返回 io.EOF.
+
   - 连接池
   
     设计一个连接池，我们需要考虑什么呢？
@@ -74,10 +165,29 @@ mysql 协议格式还是比较简单的，如下所示：
     - 连接最大空闲时间
   
       如果一个连接在最大空闲时间这个跨度内都没有被使用，显然当前客户端的请求是不频繁的，应该释放掉不适用的资源，避免资源浪费。
+      
+      那么怎么清楚空闲的连接呢？ 两种方式。
   
-
+      - 同步
+        
+        在获取空闲连接的时候，清除。这种方式缺点是清除不及时，但实现简单。
+        
+      - 异步
+        
+        开启一个专门用来清楚空闲连接的协程。清除及时，实现稍微复杂点。
+    
   - 具体数据库的 driver 如何接入 go 标准库
   
+    很简单：
+    ```go
+    func init() {
+        sql.Register("mysql", &MySQLDriver{})
+    }
+    ```
+    
+    在使用 driver 的时候，只需要 import _ path/of/package，该导入只用来完成 init() 函数的调用。
+    用户直接跟 database/sql 层交互，该层负责调用具体的 driver.
+    
   - tx 实现
     
     DB.BeginTx(ctx context.Context) 支持当 ctx 被取消的时候，事务回滚。我们来看看实现细节。
@@ -101,114 +211,114 @@ mysql 协议格式还是比较简单的，如下所示：
     我们来分析下 database/sql 中关于 tx 的实现。
   
     - tx.Begin()
-```go
-func (db *DB) Begin() (*Tx, error) {
-	return db.BeginTx(context.Background(), nil)
-}
-
-func (db *DB) begin(ctx context.Context, opts *TxOptions, strategy connReuseStrategy) (tx *Tx, err error) {
-	// 从连接池获取一个空闲的连接
-	dc, err := db.conn(ctx, strategy)
-	if err != nil {
-		return nil, err
-	}
-	// 创建事务
-	return db.beginDC(ctx, dc, dc.releaseConn, opts)
-}
-
-// beginDC starts a transaction. The provided dc must be valid and ready to use.
-func (db *DB) beginDC(ctx context.Context, dc *driverConn, release func(error), opts *TxOptions) (tx *Tx, err error) {
-	var txi driver.Tx
-	keepConnOnRollback := false
-	withLock(dc, func() {
-		// 通过接口 driver.Conn 创建一个事务接口 driver.Tx
-		txi, err = ctxDriverBegin(ctx, opts, dc.ci)
-	})
-	if err != nil {
-		release(err)
-		return nil, err
-	}
-
-	// Schedule the transaction to rollback when the context is cancelled.
-	// The cancel function in Tx will be called after done is set to true.
-	// 创建一个可取消的子 ctx，在事务提交/回滚的时候，cancel ctx，通知监控协程退出。
-	// 同时，如果父 ctx 被取消了，监控协程负责回滚事务。
-	ctx, cancel := context.WithCancel(ctx)
-	tx = &Tx{
-		db:                 db,
-		dc:                 dc,
-		releaseConn:        release,
-		txi:                txi,
-		cancel:             cancel,
-		keepConnOnRollback: keepConnOnRollback,
-		ctx:                ctx,
-	}
-	
-	// 开启一个协程，监控 ctx.Done()，当父 ctx 被取消的时候，回滚事务。
-	go tx.awaitDone()
-	return tx, nil
-}
-```
+      ```go
+      func (db *DB) Begin() (*Tx, error) {
+          return db.BeginTx(context.Background(), nil)
+      }
+      
+      func (db *DB) begin(ctx context.Context, opts *TxOptions, strategy connReuseStrategy) (tx *Tx, err error) {
+          // 从连接池获取一个空闲的连接
+          dc, err := db.conn(ctx, strategy)
+          if err != nil {
+              return nil, err
+          }
+          // 创建事务
+          return db.beginDC(ctx, dc, dc.releaseConn, opts)
+      }
+      
+      // beginDC starts a transaction. The provided dc must be valid and ready to use.
+      func (db *DB) beginDC(ctx context.Context, dc *driverConn, release func(error), opts *TxOptions) (tx *Tx, err error) {
+          var txi driver.Tx
+          keepConnOnRollback := false
+          withLock(dc, func() {
+              // 通过接口 driver.Conn 创建一个事务接口 driver.Tx
+              txi, err = ctxDriverBegin(ctx, opts, dc.ci)
+          })
+          if err != nil {
+              release(err)
+              return nil, err
+          }
+      
+          // Schedule the transaction to rollback when the context is cancelled.
+          // The cancel function in Tx will be called after done is set to true.
+          // 创建一个可取消的子 ctx，在事务提交/回滚的时候，cancel ctx，通知监控协程退出。
+          // 同时，如果父 ctx 被取消了，监控协程负责回滚事务。
+          ctx, cancel := context.WithCancel(ctx)
+          tx = &Tx{
+              db:                 db,
+              dc:                 dc,
+              releaseConn:        release,
+              txi:                txi,
+              cancel:             cancel,
+              keepConnOnRollback: keepConnOnRollback,
+              ctx:                ctx,
+          }
+          
+          // 开启一个协程，监控 ctx.Done()，当父 ctx 被取消的时候，回滚事务。
+          go tx.awaitDone()
+          return tx, nil
+      }
+      ```
   
     - tx.Commit()
-```go
-func (tx *Tx) Commit() error {
-	// 首先判断是否已经回滚，监控协程可能已经回滚事务。
-	if !atomic.CompareAndSwapInt32(&tx.done, 0, 1) {
-		return ErrTxDone
-	}
-
-	// cancel tx.ctx，使得监控协程退出。
-	tx.cancel()
-	tx.closemu.Lock()
-	tx.closemu.Unlock()
-
-	var err error
-	withLock(tx.dc, func() {
-		// 调用 driver.Tx.Commit() 完成事务提交
-		err = tx.txi.Commit()
-	})
-	if err != driver.ErrBadConn {
-		// 关闭事务所有的预处理语句
-		tx.closePrepared()
-	}
-	// 将连接扔到线程池
-	tx.close(err)
-	return err
-}
-```
+      ```go
+      func (tx *Tx) Commit() error {
+          // 首先判断是否已经回滚，监控协程可能已经回滚事务。
+          if !atomic.CompareAndSwapInt32(&tx.done, 0, 1) {
+              return ErrTxDone
+          }
+      
+          // cancel tx.ctx，使得监控协程退出。
+          tx.cancel()
+          tx.closemu.Lock()
+          tx.closemu.Unlock()
+      
+          var err error
+          withLock(tx.dc, func() {
+              // 调用 driver.Tx.Commit() 完成事务提交
+              err = tx.txi.Commit()
+          })
+          if err != driver.ErrBadConn {
+              // 关闭事务所有的预处理语句
+              tx.closePrepared()
+          }
+          // 将连接扔到线程池
+          tx.close(err)
+          return err
+      }
+      ```
     - tx.Rollback()
-```go
-// Rollback() 跟 Commit() 基本一致，不再赘述。
-func (tx *Tx) rollback(discardConn bool) error {
-	if !atomic.CompareAndSwapInt32(&tx.done, 0, 1) {
-		return ErrTxDone
-	}
-
-	if rollbackHook != nil {
-		rollbackHook()
-	}
-
-	// Cancel the Tx to release any active R-closemu locks.
-	// This is safe to do because tx.done has already transitioned
-	// from 0 to 1. Hold the W-closemu lock prior to rollback
-	// to ensure no other connection has an active query.
-	tx.cancel()
-	tx.closemu.Lock()
-	tx.closemu.Unlock()
-
-	var err error
-	withLock(tx.dc, func() {
-		err = tx.txi.Rollback()
-	})
-	if err != driver.ErrBadConn {
-		tx.closePrepared()
-	}
-	if discardConn {
-		err = driver.ErrBadConn
-	}
-	tx.close(err)
-	return err
-}
-```
+      ```go
+      // Rollback() 跟 Commit() 基本一致，不再赘述。
+      func (tx *Tx) rollback(discardConn bool) error {
+          if !atomic.CompareAndSwapInt32(&tx.done, 0, 1) {
+              return ErrTxDone
+          }
+      
+          if rollbackHook != nil {
+              rollbackHook()
+          }
+      
+          // Cancel the Tx to release any active R-closemu locks.
+          // This is safe to do because tx.done has already transitioned
+          // from 0 to 1. Hold the W-closemu lock prior to rollback
+          // to ensure no other connection has an active query.
+          tx.cancel()
+          tx.closemu.Lock()
+          tx.closemu.Unlock()
+      
+          var err error
+          withLock(tx.dc, func() {
+              err = tx.txi.Rollback()
+          })
+          if err != driver.ErrBadConn {
+              tx.closePrepared()
+          }
+          if discardConn {
+              err = driver.ErrBadConn
+          }
+          tx.close(err)
+          return err
+      }
+      ```
 

@@ -30,7 +30,7 @@ func initDB() *sql.DB {
 }
 
 func main() {
-	db := initDB()
+	_ = initDB()
 
 	/*
 		Insert
