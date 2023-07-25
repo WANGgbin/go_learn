@@ -15,7 +15,7 @@ type City struct {
 }
 
 func initDB() *sql.DB {
-	dsn := "root:123456@tcp(localhost:3306)/world"
+	dsn := "test:123456@tcp(localhost:3306)/world"
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		panic(fmt.Sprintf("open db err: %v", err))
@@ -30,7 +30,7 @@ func initDB() *sql.DB {
 }
 
 func main() {
-	_ = initDB()
+	db := initDB()
 
 	/*
 		Insert
@@ -67,24 +67,24 @@ func main() {
 	//fmt.Printf("Result is %+v\n", city)
 
 	// 2. 多行查询
-	//rows, err := db.Query("select * from city where CountryCode = ? order by id desc", "CHN")
-	//if err != nil {
-	//	fmt.Printf("Query error: %v\n", err)
-	//	return
-	//}
-	//
-	//// 多行查询必须通过调用 Close() 来释放底层 TCP 链接。
-	//defer rows.Close()
-	//
-	//for rows.Next() {
-	//	var city City
-	//	err = rows.Scan(&city.ID, &city.Name, &city.CountryCode, &city.District, &city.Population)
-	//	if err != nil {
-	//		fmt.Printf("Scan error: %v\n", err)
-	//		return
-	//	}
-	//	fmt.Printf("Row: %#v\n", city)
-	//}
+	rows, err := db.Query("select * from city where CountryCode = ? order by id desc", "CHN")
+	if err != nil {
+		fmt.Printf("Query error: %v\n", err)
+		return
+	}
+
+	// 多行查询必须通过调用 Close() 来释放底层 TCP 链接。
+	defer rows.Close()
+
+	for rows.Next() {
+		var city City
+		err = rows.Scan(&city.ID, &city.Name, &city.CountryCode, &city.District, &city.Population)
+		if err != nil {
+			fmt.Printf("Scan error: %v\n", err)
+			return
+		}
+		fmt.Printf("Row: %#v\n", city)
+	}
 
 	/*
 		***************** UPDATE ****************
