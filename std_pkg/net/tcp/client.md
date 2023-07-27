@@ -133,4 +133,93 @@
             return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &ev)
         }
     ```
-- 
+
+- connect() 的超时如何实现
+
+    在创建套接字发起连接并注册到 go netpoll 中后，会根据 ctx.Deadline() 判断是否设置超时时间以及超时时间是什么。然后通过
+  `poll.FD.SetWriteDeadline()` 设置超时时间，并在连接成功之后清理相关定时器。代码如下：
+  
+    ```go
+        if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+            fd.pfd.SetWriteDeadline(deadline)
+            defer fd.pfd.SetWriteDeadline(noDeadline)
+        }
+    ```
+  
+    之后，当前协程便通过 `poll.FD.WaitWrite()` 等待连接成功或者出错。但是这样就可以了吗？
+  
+    如果上层调用者 cancel 了 ctx，等待套接字连接成功的协程如何感知到该信号并退出呢？ net 标准包给出的方案是，启动一个异步监控
+  协程，当监控到 ctx 被 cancel，通过 `poll.FD.SetWriteDeadline()` 设置一个过去的时间，从而立刻激活阻塞协程。相关代码如下：
+  
+    ```go
+        // Start the "interrupter" goroutine, if this context might be canceled.
+        // (The background context cannot)
+        //
+        // The interrupter goroutine waits for the context to be done and
+        // interrupts the dial (by altering the fd's write deadline, which
+        // wakes up waitWrite).
+      
+        if ctx != context.Background() {
+		// Wait for the interrupter goroutine to exit before returning
+		// from connect.
+		done := make(chan struct{})
+		interruptRes := make(chan error)
+		defer func() {
+            // 通知监控协程退出
+			close(done)
+            // 确保监控协程退出
+			if ctxErr := <-interruptRes; ctxErr != nil && ret == nil {
+				// The interrupter goroutine called SetWriteDeadline,
+				// but the connect code below had returned from
+				// waitWrite already and did a successful connect (ret
+				// == nil). Because we've now poisoned the connection
+				// by making it unwritable, don't return a successful
+				// dial. This was issue 16523.
+				ret = mapErr(ctxErr)
+				fd.Close() // prevent a leak
+			}
+		}()
+        
+        // 启动异步监控协程
+		go func() {
+			select {
+			case <-ctx.Done():
+				// Force the runtime's poller to immediately give up
+				// waiting for writability, unblocking waitWrite
+				// below.
+                
+                // aLongTimeAgo 是一个过去的时间，对于 SetDeadline() 函数而言，当设置为一个过去时间，如果已经有相关定时器，
+                // 删除已有的定时器，同时立刻激活任何阻塞在 i/o 上的协程。 详情参考：runtime/netpoll.go: poll_runtime_pollSetDeadline
+				fd.pfd.SetWriteDeadline(aLongTimeAgo)
+                // 告诉主协程本协程已完成
+				interruptRes <- ctx.Err()
+			
+            // 这个分支很重要，如果上层没有取消 ctx 且 连接成功，则通过监控 done 来退出监控协程，否则会造成协程泄露。
+            case <-done:
+				interruptRes <- nil
+			}
+		}()
+	}
+    
+    for {
+		if err := fd.pfd.WaitWrite(); err != nil {
+            // 这里为什么要 case <-ctx.Done() 呢？
+            // 因为从 WaitWrite() 返回，很有可能是因为上层取消 ctx 导致的，因此在这里需要判断这种情况，
+            // 如果是则返回 ctx.Err()。
+			select {
+			case <-ctx.Done():
+				return nil, mapErr(ctx.Err())
+			default:
+			}
+			return nil, err
+		}
+		// ...
+	}  
+    ```
+  
+- context 的使用
+    
+    什么时候才应该监控 ctx.Done() 呢？
+  
+    - 如果操作分成几个重要的 step，可以在每个 step 前判断一次上下文是否结束。
+    - TODO(@wangguobin)
