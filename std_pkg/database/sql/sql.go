@@ -67,7 +67,7 @@ func main() {
 	//fmt.Printf("Result is %+v\n", city)
 
 	// 2. 多行查询
-	rows, err := db.Query("select * from city where CountryCode = ? order by id desc", "CHN")
+	rows, err := db.Query("select * from person where born_time > ?", "1998-01-01T00:00:00")
 	if err != nil {
 		fmt.Printf("Query error: %v\n", err)
 		return
@@ -76,15 +76,15 @@ func main() {
 	// 多行查询必须通过调用 Close() 来释放底层 TCP 链接。
 	defer rows.Close()
 
-	for rows.Next() {
-		var city City
-		err = rows.Scan(&city.ID, &city.Name, &city.CountryCode, &city.District, &city.Population)
-		if err != nil {
-			fmt.Printf("Scan error: %v\n", err)
-			return
-		}
-		fmt.Printf("Row: %#v\n", city)
-	}
+	//for rows.Next() {
+	//	var city City
+	//	err = rows.Scan(&city.ID, &city.Name, &city.CountryCode, &city.District, &city.Population)
+	//	if err != nil {
+	//		fmt.Printf("Scan error: %v\n", err)
+	//		return
+	//	}
+	//	fmt.Printf("Row: %#v\n", city)
+	//}
 
 	/*
 		***************** UPDATE ****************
