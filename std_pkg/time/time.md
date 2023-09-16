@@ -63,3 +63,9 @@ type Time struct {
 		return uint64(sec + (unixToInternal + internalToAbsolute))
 	}
   ```
+
+# 几个比较重要的函数
+
+- Date()
+
+  基于 year, month, ..., second, nanosecond, loc 来构造 Time。

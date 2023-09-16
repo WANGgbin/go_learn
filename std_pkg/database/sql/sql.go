@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"time"
 )
 
 type City struct {
@@ -12,6 +14,12 @@ type City struct {
 	CountryCode string
 	District string
 	Population int
+}
+
+type Person struct {
+	Name string
+	Age int16
+	BornTime time.Time
 }
 
 func initDB() *sql.DB {
@@ -67,7 +75,8 @@ func main() {
 	//fmt.Printf("Result is %+v\n", city)
 
 	// 2. 多行查询
-	rows, err := db.Query("select * from person where born_time > ?", "1998-01-01T00:00:00")
+	rows, err := db.QueryContext(context.Background(), "select name, age, born_time from person where is_alive = ?", true )
+
 	if err != nil {
 		fmt.Printf("Query error: %v\n", err)
 		return
@@ -76,33 +85,33 @@ func main() {
 	// 多行查询必须通过调用 Close() 来释放底层 TCP 链接。
 	defer rows.Close()
 
-	//for rows.Next() {
-	//	var city City
-	//	err = rows.Scan(&city.ID, &city.Name, &city.CountryCode, &city.District, &city.Population)
-	//	if err != nil {
-	//		fmt.Printf("Scan error: %v\n", err)
-	//		return
-	//	}
-	//	fmt.Printf("Row: %#v\n", city)
-	//}
+	for rows.Next() {
+		var p Person
+		err = rows.Scan(&p.Name, &p.BornTime)
+		if err != nil {
+			fmt.Printf("Scan error: %v\n", err)
+			return
+		}
+		fmt.Printf("Row: %#v\n", p)
+	}
 
 	/*
 		***************** UPDATE ****************
 	*/
 
-	//ret, err := db.Exec("update city set population = 10000000 where district = 'peking'")
-	//if err != nil {
-	//	fmt.Printf("Update error: %v\n", err)
-	//	return
-	//}
-	//
-	//rowCount, err := ret.RowsAffected()
-	//if err != nil {
-	//	fmt.Printf("RowsAffected error: %v\n", err)
-	//	return
-	//}
-	//
-	//fmt.Printf("RowsAffected: %d\n", rowCount)
+	ret, err := db.Exec("update city set population = 10000000 where district = ?", "peking")
+	if err != nil {
+		fmt.Printf("Update error: %v\n", err)
+		return
+	}
+
+	rowCount, err := ret.RowsAffected()
+	if err != nil {
+		fmt.Printf("RowsAffected error: %v\n", err)
+		return
+	}
+
+	fmt.Printf("RowsAffected: %d\n", rowCount)
 
 	/*
 		***************** DELETE *******************
@@ -127,19 +136,19 @@ func main() {
 		************ TRANSACTION *************
 	*/
 
-	//tx, err := db.Begin()
-	//if err != nil {
-	//	fmt.Printf("tx begin error: %v\n", err)
-	//	return
-	//}
-	//
-	//ret, err := tx.Exec("insert into city(name, countrycode, district, population) values(?, ?, ?, ?)", "Beijing", "CHN", "Beijing", 10000000)
-	//if err != nil {
-	//	tx.Rollback()
-	//	fmt.Printf("insert error: %v, rollback!", err)
-	//	return
-	//}
-	//tx.Commit()
-	//id, _ := ret.LastInsertId()
-	//fmt.Printf("new id: %d\n", id)
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Printf("tx begin error: %v\n", err)
+		return
+	}
+
+	ret, err := tx.Exec("insert into city(name, countrycode, district, population) values(?, ?, ?, ?)", "Beijing", "CHN", "Beijing", 10000000)
+	if err != nil {
+		tx.Rollback()
+		fmt.Printf("insert error: %v, rollback!", err)
+		return
+	}
+	tx.Commit()
+	id, _ := ret.LastInsertId()
+	fmt.Printf("new id: %d\n", id)
 }

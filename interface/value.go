@@ -1,9 +1,5 @@
 package main
 
-import (
-	"reflect"
-)
-
 // 注意：
 // 通过反射修改值，一定要传递指针，如果传递的是值，则 Set 类函数设置的值的拷贝，因为这是没有意义的，所以会触发 panic。（通过检查 Value 中的类型元数据是不是指针类型）
 // 传递指针，还需要调用 Elem() 函数，使得 Value() 中的类型元数据为值类型，而 data 还是指向原来的数据，从而能够修改值
@@ -289,39 +285,110 @@ func MakeSlice(typ Type, len, cap int) Value
 // 	fmt.Printf("copy: s: %v, m: %v, p: %v\n", infoCopy.S, infoCopy.M, *infoCopy.P)
 // }
 
-type person struct {
-	name string
-	age  int
-}
+/*
 
-func (p *person) GetName() string {
-	return p.name
-}
+value 转化为 interface{} 需要注意的地方：
 
-func (p *person) GetAge() int {
-	return p.age
-}
+1、 一定要通过函数 reflect.Value.Interface() 的方式将 reflect.Value 转化为 Interface{}
+
+2、 reflect.Value 转化为 interface{} 后，再转化为 reflect.Value 会丢失原来的 flag。比如原来 reflect.Value 可设置，
+转化为 interface 再转化为 reflect.Value 就不再可设置。
+
+*/
+
+//func main() {
+//	ptr := new(int)
+//	*ptr = 10
+//	v := reflect.ValueOf(ptr)
+//	elem := v.Elem()
+//	// 可以设置
+//	elem.SetInt(11)
+//	i := reflect.ValueOf(elem.Interface())
+//	// 不再能设置，触发 panic
+//	i.SetInt(12)
+//	fmt.Printf("%d\n", *ptr)
+//}
+
+//type person struct {
+//	name string
+//	age  int
+//}
+//
+//func (p *person) GetName() string {
+//	return p.name
+//}
+//
+//func (p *person) GetAge() int {
+//	return p.age
+//}
+//
+//func main() {
+//	p := &person{name: "wgb", age: 12}
+//	v := reflect.ValueOf(p)
+//
+//	/*
+//		Method():
+//		1. 只有导出方法才可以访问
+//		2. 方法序号不是跟申明顺序保持一致的, 而是根据方法名排序的. 目的是为了方便接口的断定
+//		3. Call 内部将 rcvr 当作一个普通的入参处理.
+//	*/
+//	age := v.Method(0).Call([]reflect.Value{})[0].Interface().(int)
+//	print(age)
+//
+//	f := func() {}
+//	print(reflect.TypeOf(f).Name())
+//
+//	/*
+//		Method() 的类型元信息与对应的函数元信息是一致的.
+//	*/
+//
+//	f1 := func() int { return 0 }
+//	print(reflect.TypeOf(f1) == reflect.TypeOf(p.GetAge)) // output: true
+//}
+
+
+/*
+	(*rtype).AssignableTo() 函数
+
+	go 语言中的类型可以分为命名类型(有名字)、非命名类型(无名)。非命名类型包括：array、slice、map、func、chan、匿名结构体。
+	凡是用 type 类型声明的都是命名类型，常见的基础类型也都是命名类型。
+
+	AssignableTo() 的逻辑是什么呢？
+
+	- 命名类型之间不可直接赋值
+	- 非命名类型之间可以赋值
+	- 非命名类型可以赋值给命名类型
+
+*/
+//
+//type MyInt int
+//
+//func add(i, j int) int {
+//	return i + j
+//}
+//
+//func minus(i, j int) {
+//	return
+//}
+//
+//func main() {
+//	// int 和 MyInt 都是命名类型，返回 false
+//	println(reflect.TypeOf(2).AssignableTo(reflect.TypeOf(MyInt(2))))
+//	println(reflect.TypeOf(2).Name()) // int
+//	println(reflect.TypeOf(MyInt(2)).Name()) // MyInt
+//
+//	type MyFunc func(int, int) int
+//	// add 是未命名类型变量，MyFunc 是命名类型，且函数入参和出参都一样，返回 true
+//	println(reflect.TypeOf(add).AssignableTo(reflect.TypeOf(MyFunc(nil))))
+//	// minus 与 MyFunc 类型不一致，返回 false
+//	println(reflect.TypeOf(minus).AssignableTo(reflect.TypeOf(MyFunc(nil))))
+//}
+
+/*
+
+	(*rtype).ConvertibleTo() 函数
+*/
 
 func main() {
-	p := &person{name: "wgb", age: 12}
-	v := reflect.ValueOf(p)
 
-	/*
-		Method():
-		1. 只有导出方法才可以访问
-		2. 方法序号不是跟申明顺序保持一致的, 而是根据方法名排序的. 目的是为了方便接口的断定
-		3. Call 内部将 rcvr 当作一个普通的入参处理.
-	*/
-	age := v.Method(0).Call([]reflect.Value{})[0].Interface().(int)
-	print(age)
-
-	f := func() {}
-	print(reflect.TypeOf(f).Name())
-
-	/*
-		Method() 的类型元信息与对应的函数元信息是一致的.
-	*/
-
-	f1 := func() int { return 0 }
-	print(reflect.TypeOf(f1) == reflect.TypeOf(p.GetAge)) // output: true
 }
