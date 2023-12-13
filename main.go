@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"reflect"
+)
+
 type Person struct {
 	Age int
 }
@@ -12,27 +17,28 @@ type Student struct {
 	Person
 }
 
-type myInt  int
-func (m *myInt) set(p int) {
+type myInt int
+
+func (m *myInt) Set(p int) {
 	*m = myInt(p)
 }
 
-func main() {
-	//reflect.ValueOf().Call()
-	//reflect.ValueOf().Method().Call()
-	//reflect.TypeOf().Method()
-	//reflect.TypeOf().Implements()
-	//reflect.MakeFunc()
-	//reflect.MakeSlice()
-	//reflect.StructOf()
-	//errors.Is()
-	s1 := make([]int, 3)
-	s1[0] = 0
-	s1[1] = 1
-	s1[2] = 2
+func add(inputs []reflect.Value) []reflect.Value {
+	var ret int64
+	for _, input := range inputs {
+		ret += input.Int()
+	}
 
-	s2 := make([]int, 4)
-	print(copy(s2, s1))
-
+	return []reflect.Value{reflect.ValueOf(ret)}
 }
 
+func main() {
+
+	fn := reflect.MakeFunc(reflect.TypeOf((func(i, j int) int64)(nil)), add)
+
+	ret := fn.Interface().(func(int, int) int64)(1, 2)
+	fmt.Printf("%d\n", ret)
+
+	rets := fn.Call([]reflect.Value{reflect.ValueOf(1), reflect.ValueOf(2)})
+	// fmt.Printf("%d\n", rets[0].Int())
+}
