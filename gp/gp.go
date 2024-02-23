@@ -2,28 +2,34 @@ package main
 
 import "fmt"
 
-type struct1 struct {
-	i int
-	p *int
+type MyStruct1 struct{}
+
+func (m MyStruct1) Method1() {
+	fmt.Printf("MyStruct1::Method1")
 }
 
-type struct2 struct {
-	i int
-	p *float32
+type MyStruct2 MyStruct1
+
+func (m MyStruct2) Method1() {
+	fmt.Printf("MyStruct2::Method1")
 }
 
-func print[T any](v T) {
-	fmt.Print(v)
+type Param interface {
+	Method1()
 }
 
-func add[T int | float32](i, j T) T {
-	return i + j
+func Print1[T MyStruct1 | MyStruct2](obj T) {
+	obj.Method1()
 }
 
-func add[T float64](i, j T) T {
-	return i + j
+func Print[T Param](obj T) {
+	obj.Method1()
 }
 
 func main() {
-	fmt.Print(add(1, 2))
+	var obj MyStruct1
+	Print(obj)
+
+	var obj1 MyStruct2
+	Print(obj1)
 }
